@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Sandbox Builder - Protection System</title>
+    <title>3D Sandbox Builder - Custom BGM</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #000; }
         canvas { display: block; }
@@ -117,7 +117,6 @@
     <div>WASD: 移動 | Space: ジャンプ</div>
     <div>左クリック: <span style="color: #ff4444;">破壊(ゲット)</span> | 右クリック: <span style="color: #44ff44;">配置(消費)</span></div>
     <div id="current-block-text" style="color: #FFD700; font-weight: bold; margin-top: 5px;">現在のブロック: Grass</div>
-    <div style="font-size: 11px; opacity: 0.8; margin-top: 5px;">※最下層のブロックは破壊できません</div>
 </div>
 
 <div id="bgm-status">🔊 Music: Click to Start</div>
@@ -139,16 +138,16 @@
 
 <div id="instructions">
     <h1>クリックしてゲーム開始</h1>
-    <p>奈落落下防止システムを導入しました</p>
+    <p>BGM: sound.mp3 を読み込みます</p>
     <p style="margin-top: 20px; font-size: 0.9em; color: #aaa;">一番下のブロックは壊せないようになっています</p>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-    let scene, camera, renderer, clock, audioCtx;
+    let scene, camera, renderer, clock, audioCtx, audioListener, bgmSound;
     let isBGMPlaying = false;
     
-    // インベントリ管理
+    // Inventory management
     let inventory = {
         'grass': 10,
         'dirt': 10,
@@ -190,52 +189,47 @@
     const SMOOTHING = 0.3; 
     const COYOTE_TIME = 0.15; 
     const JUMP_BUFFER = 0.15; 
-    const FLOOR_Y = -5; // 破壊不可能な底の高さ
+    const FLOOR_Y = -5; // Unbreakable bottom Y level
 
     const PHYSICS_STEP = 1/120;
     let physicsAccumulator = 0;
 
     let instructions, blockOptions, currentBlockText;
 
-    // --- Procedural Ambient Music Generator ---
-    function startAmbientMusic() {
+    // --- BGM Loader and Manager ---
+    function initAudio() {
         if (isBGMPlaying) return;
-        isBGMPlaying = true;
         
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
+        // AudioListener setup
+        audioListener = new THREE.AudioListener();
+        camera.add(audioListener);
 
-        const notes = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
+        // Global Audio object for BGM
+        bgmSound = new THREE.Audio(audioListener);
 
-        const playNote = () => {
-            if (!isLocked) {
-                setTimeout(playNote, 2000);
-                return;
-            }
-            const freq = notes[Math.floor(Math.random() * notes.length)];
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            const filter = audioCtx.createBiquadFilter();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-            filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(1000, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0, audioCtx.currentTime);
-            gain.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 1);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 6);
-            osc.connect(filter);
-            filter.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 7);
-            setTimeout(playNote, 2000 + Math.random() * 3000);
-        };
-        playNote();
-        document.getElementById('bgm-status').innerText = "🔊 Music: Procedural Ambient";
+        const audioLoader = new THREE.AudioLoader();
+        audioLoader.load('sound.mp3', function(buffer) {
+            bgmSound.setBuffer(buffer);
+            bgmSound.setLoop(true);
+            bgmSound.setVolume(0.5);
+            bgmSound.play();
+            isBGMPlaying = true;
+            document.getElementById('bgm-status').innerText = "🔊 Music: sound.mp3 Playing";
+        }, 
+        // Progress
+        null,
+        // Error
+        function(err) {
+            console.error('BGM load failed:', err);
+            document.getElementById('bgm-status').innerText = "❌ Music: Error loading sound.mp3";
+        });
+        
+        // Fallback for SFX context
+        audioCtx = audioListener.context;
     }
 
     function playSound(type) {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!audioCtx) return;
         if (audioCtx.state === 'suspended') audioCtx.resume();
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
@@ -369,7 +363,7 @@
                 createBlock(x, h, z, 0x4CAF50, "grass");
                 createBlock(x, h - 1, z, 0x8B4513, "dirt");
                 
-                // 最下層まで石を敷き詰める
+                // Fill stone down to FLOOR_Y
                 for(let iy = h-2; iy >= FLOOR_Y; iy--) {
                     createBlock(x, iy, z, 0x808080, "stone");
                 }
@@ -445,7 +439,7 @@
         document.addEventListener('keyup', onKeyUp);
         instructions.addEventListener('click', () => { 
             document.body.requestPointerLock();
-            startAmbientMusic(); 
+            initAudio(); 
         });
         document.addEventListener('pointerlockchange', () => {
             isLocked = (document.pointerLockElement === document.body);
@@ -488,7 +482,7 @@
                 const targetObj = intersect.object;
                 
                 if (isDestroy) {
-                    // 奈落防止：高さが FLOOR_Y (-5) 以下のブロックは破壊不可
+                    // Protection: Blocks at FLOOR_Y or below are unbreakable
                     if (targetObj.position.y <= FLOOR_Y) {
                         playSound('denied');
                         return;
